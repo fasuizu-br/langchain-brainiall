@@ -1,0 +1,66 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "langchain-brainiall"
+version = "0.1.0"
+description = "LangChain integration for Brainiall LLM Gateway - 113+ AI models from 17 providers"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+authors = [
+    { name = "Brainiall", email = "fasuizu@brainiall.com" },
+]
+keywords = [
+    "langchain",
+    "llm",
+    "ai",
+    "brainiall",
+    "openai",
+    "claude",
+    "bedrock",
+    "gateway",
+    "chatbot",
+    "embeddings",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "langchain-core>=0.3.0",
+    "langchain-openai>=0.3.0",
+]
+
+[project.urls]
+Homepage = "https://brainiall.com"
+Repository = "https://github.com/fasuizu-br/langchain-brainiall"
+Documentation = "https://brainiall.com/docs"
+
+[tool.hatch.build.targets.wheel]
+packages = ["langchain_brainiall"]
+
+[tool.mypy]
+disallow_untyped_defs = true
+
+[tool.ruff]
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
+]
