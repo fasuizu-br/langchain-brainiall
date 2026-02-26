@@ -4,10 +4,23 @@
 
 langchain-brainiall is a LangChain integration package for the Brainiall LLM Gateway. It provides `ChatBrainiall` (chat models) and `BrainiallEmbeddings` (embeddings) classes that give LangChain users access to 113+ AI models from 17 providers (Anthropic, DeepSeek, Meta, Qwen, Mistral, Amazon, NVIDIA, MiniMax, Moonshot, and more) through a single OpenAI-compatible API powered by AWS Bedrock.
 
+Key benefits:
+- **One API key, 113+ models**: Access Claude, DeepSeek, Llama, Qwen, Mistral, Nova, and more
+- **Drop-in replacement**: Swap `ChatOpenAI` for `ChatBrainiall` with zero code changes
+- **Full LangChain compatibility**: Streaming, tool calling, structured output, async, batching, RAG, agents
+- **Cost optimization**: Use cheap models ($0.035/MTok) for drafting, powerful models ($5/MTok) for refinement
+- **AWS Bedrock backend**: Enterprise-grade reliability, prompt caching, cross-region inference
+
 ## Installation
 
 ```bash
 pip install langchain-brainiall
+```
+
+For development with all extras:
+
+```bash
+pip install langchain-brainiall langchain-chroma faiss-cpu langgraph
 ```
 
 ## Quick Start
@@ -245,6 +258,396 @@ for q, r in zip(questions, responses):
     print(f"A: {r.content[:100]}...\n")
 ```
 
+## Advanced Usage
+
+### Conversation Memory with RunnableWithMessageHistory
+
+```python
+from langchain_brainiall import ChatBrainiall
+from langchain_core.chat_history import InMemoryChatMessageHistory
+from langchain_core.runnables.history import RunnableWithMessageHistory
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+
+llm = ChatBrainiall(model="claude-sonnet-4-6")
+
+prompt = ChatPromptTemplate.from_messages([
+    ("system", "You are a helpful assistant. Be concise."),
+    MessagesPlaceholder(variable_name="history"),
+    ("human", "{input}"),
+])
+
+chain = prompt | llm
+
+# In-memory store for session histories
+store = {}
+
+def get_session_history(session_id: str):
+    if session_id not in store:
+        store[session_id] = InMemoryChatMessageHistory()
+    return store[session_id]
+
+with_history = RunnableWithMessageHistory(
+    chain,
+    get_session_history,
+    input_messages_key="input",
+    history_messages_key="history",
+)
+
+# First message
+config = {"configurable": {"session_id": "user-123"}}
+response = with_history.invoke({"input": "My name is Alice"}, config=config)
+print(response.content)
+
+# Second message -- remembers context
+response = with_history.invoke({"input": "What's my name?"}, config=config)
+print(response.content)  # "Your name is Alice"
+```
+
+### Streaming with Callbacks
+
+```python
+from langchain_brainiall import ChatBrainiall
+from langchain_core.callbacks import StreamingStdOutCallbackHandler
+
+llm = ChatBrainiall(
+    model="claude-sonnet-4-6",
+    streaming=True,
+    callbacks=[StreamingStdOutCallbackHandler()],
+)
+
+# Tokens are printed to stdout as they arrive
+response = llm.invoke("Write a short story about a robot learning to paint")
+```
+
+### Fallback Chains
+
+Use a cheaper model first, fall back to a more powerful one on failure:
+
+```python
+from langchain_brainiall import ChatBrainiall
+
+# Primary: fast and cheap
+primary = ChatBrainiall(model="nova-micro", max_tokens=512)
+
+# Fallback: more capable
+fallback = ChatBrainiall(model="claude-sonnet-4-6", max_tokens=2048)
+
+# Creates a chain that tries primary first, then fallback
+chain = primary.with_fallbacks([fallback])
+
+response = chain.invoke("Explain the theory of relativity in detail")
+print(response.content)
+```
+
+### Router Chain — Dynamic Model Selection
+
+```python
+from langchain_brainiall import ChatBrainiall
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnableLambda
+
+# Define specialized models
+models = {
+    "code": ChatBrainiall(model="deepseek-v3", temperature=0),
+    "creative": ChatBrainiall(model="claude-sonnet-4-6", temperature=0.9),
+    "fast": ChatBrainiall(model="nova-micro", temperature=0.3),
+    "reasoning": ChatBrainiall(model="deepseek-r1", temperature=0),
+}
+
+# Router that picks the best model
+router_llm = ChatBrainiall(model="claude-haiku-4-5", temperature=0)
+router_prompt = ChatPromptTemplate.from_template(
+    "Classify this task into exactly one category: code, creative, fast, reasoning.\n"
+    "Task: {input}\nCategory:"
+)
+router_chain = router_prompt | router_llm | StrOutputParser()
+
+def route(info):
+    category = info["category"].strip().lower()
+    model = models.get(category, models["fast"])
+    return model.invoke(info["input"])
+
+# Full pipeline
+chain = (
+    {"input": lambda x: x, "category": router_chain}
+    | RunnableLambda(route)
+)
+
+# Automatically routes to the right model
+print(chain.invoke("Write a Python function to merge two sorted lists"))
+print(chain.invoke("Write a poem about autumn leaves"))
+```
+
+### Parallel Execution with RunnableParallel
+
+```python
+from langchain_brainiall import ChatBrainiall
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnableParallel
+from langchain_core.output_parsers import StrOutputParser
+
+llm = ChatBrainiall(model="claude-haiku-4-5")
+
+# Run multiple chains in parallel
+parallel = RunnableParallel(
+    summary=ChatPromptTemplate.from_template("Summarize: {text}") | llm | StrOutputParser(),
+    sentiment=ChatPromptTemplate.from_template("What is the sentiment of: {text}") | llm | StrOutputParser(),
+    keywords=ChatPromptTemplate.from_template("Extract 5 keywords from: {text}") | llm | StrOutputParser(),
+)
+
+result = parallel.invoke({"text": "LangChain makes it easy to build AI applications with composable chains."})
+print(f"Summary: {result['summary']}")
+print(f"Sentiment: {result['sentiment']}")
+print(f"Keywords: {result['keywords']}")
+```
+
+### Output Parsing with Pydantic
+
+```python
+from pydantic import BaseModel, Field
+from langchain_brainiall import ChatBrainiall
+from langchain_core.prompts import ChatPromptTemplate
+
+class Recipe(BaseModel):
+    name: str = Field(description="Recipe name")
+    ingredients: list[str] = Field(description="List of ingredients")
+    steps: list[str] = Field(description="Cooking steps")
+    prep_time_minutes: int = Field(description="Preparation time in minutes")
+    difficulty: str = Field(description="easy, medium, or hard")
+
+llm = ChatBrainiall(model="claude-sonnet-4-6")
+structured = llm.with_structured_output(Recipe)
+
+prompt = ChatPromptTemplate.from_template(
+    "Create a recipe for {dish}. Use common ingredients."
+)
+
+chain = prompt | structured
+
+recipe = chain.invoke({"dish": "pasta carbonara"})
+print(f"{recipe.name} ({recipe.difficulty}, {recipe.prep_time_minutes} min)")
+for i, step in enumerate(recipe.steps, 1):
+    print(f"  {i}. {step}")
+```
+
+### Multi-Modal Input (Vision)
+
+```python
+from langchain_brainiall import ChatBrainiall
+from langchain_core.messages import HumanMessage
+
+llm = ChatBrainiall(model="claude-sonnet-4-6")
+
+message = HumanMessage(
+    content=[
+        {"type": "text", "text": "What do you see in this image? Describe in detail."},
+        {
+            "type": "image_url",
+            "image_url": {
+                "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a7/Camponotus_flavomarginatus_ant.jpg/320px-Camponotus_flavomarginatus_ant.jpg"
+            },
+        },
+    ],
+)
+
+response = llm.invoke([message])
+print(response.content)
+```
+
+### JSON Mode
+
+```python
+from langchain_brainiall import ChatBrainiall
+
+llm = ChatBrainiall(
+    model="claude-sonnet-4-6",
+    model_kwargs={"response_format": {"type": "json_object"}},
+)
+
+response = llm.invoke(
+    "Extract structured data as JSON: John Smith, 35, Senior Engineer at Google in Mountain View"
+)
+
+import json
+data = json.loads(response.content)
+print(json.dumps(data, indent=2))
+```
+
+## RAG Patterns
+
+### Full RAG Pipeline with ChromaDB
+
+```python
+from langchain_brainiall import ChatBrainiall, BrainiallEmbeddings
+from langchain_chroma import Chroma
+from langchain_core.documents import Document
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough
+
+# Initialize
+embeddings = BrainiallEmbeddings(model="bge-m3")
+llm = ChatBrainiall(model="claude-sonnet-4-6", temperature=0)
+
+# Load documents
+docs = [
+    Document(page_content="Python was created in 1991 by Guido van Rossum.", metadata={"source": "wiki"}),
+    Document(page_content="JavaScript was created in 1995 by Brendan Eich.", metadata={"source": "wiki"}),
+    Document(page_content="Rust was first released in 2010 by Mozilla.", metadata={"source": "wiki"}),
+    Document(page_content="Go was designed at Google and released in 2009.", metadata={"source": "wiki"}),
+    Document(page_content="TypeScript was developed by Microsoft and released in 2012.", metadata={"source": "wiki"}),
+]
+
+# Create vector store
+db = Chroma.from_documents(docs, embeddings)
+retriever = db.as_retriever(search_kwargs={"k": 3})
+
+# RAG prompt
+prompt = ChatPromptTemplate.from_messages([
+    ("system", "Answer based on the context below. If unsure, say so.\n\nContext:\n{context}"),
+    ("human", "{question}"),
+])
+
+def format_docs(docs):
+    return "\n".join(doc.page_content for doc in docs)
+
+# RAG chain
+rag_chain = (
+    {"context": retriever | format_docs, "question": RunnablePassthrough()}
+    | prompt
+    | llm
+    | StrOutputParser()
+)
+
+# Query
+answer = rag_chain.invoke("Which programming languages were created by individuals vs companies?")
+print(answer)
+```
+
+### RAG with Document Loaders and Text Splitting
+
+```python
+from langchain_brainiall import ChatBrainiall, BrainiallEmbeddings
+from langchain_chroma import Chroma
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.document_loaders import TextLoader
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough
+
+# Load and split documents
+loader = TextLoader("my_document.txt")
+docs = loader.load()
+
+splitter = RecursiveCharacterTextSplitter(
+    chunk_size=1000,
+    chunk_overlap=200,
+    separators=["\n\n", "\n", ". ", " ", ""],
+)
+chunks = splitter.split_documents(docs)
+
+# Create vector store
+embeddings = BrainiallEmbeddings(model="bge-m3")
+db = Chroma.from_documents(chunks, embeddings, persist_directory="./chroma_db")
+retriever = db.as_retriever(search_type="mmr", search_kwargs={"k": 5, "fetch_k": 10})
+
+# RAG chain with sources
+llm = ChatBrainiall(model="claude-sonnet-4-6", temperature=0)
+
+prompt = ChatPromptTemplate.from_messages([
+    ("system", "Answer the question based on the context. Cite sources.\n\nContext:\n{context}"),
+    ("human", "{question}"),
+])
+
+def format_docs_with_sources(docs):
+    return "\n\n".join(
+        f"[Source: {doc.metadata.get('source', 'unknown')}]\n{doc.page_content}"
+        for doc in docs
+    )
+
+rag_chain = (
+    {"context": retriever | format_docs_with_sources, "question": RunnablePassthrough()}
+    | prompt
+    | llm
+    | StrOutputParser()
+)
+
+answer = rag_chain.invoke("What are the main topics covered in the document?")
+print(answer)
+```
+
+### Conversational RAG with Memory
+
+```python
+from langchain_brainiall import ChatBrainiall, BrainiallEmbeddings
+from langchain_chroma import Chroma
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.messages import HumanMessage, AIMessage
+
+embeddings = BrainiallEmbeddings(model="bge-m3")
+llm = ChatBrainiall(model="claude-sonnet-4-6", temperature=0)
+
+# Assume db is already populated
+db = Chroma(embedding_function=embeddings, persist_directory="./chroma_db")
+retriever = db.as_retriever(search_kwargs={"k": 3})
+
+# Contextualize question using chat history
+contextualize_prompt = ChatPromptTemplate.from_messages([
+    ("system", "Given the chat history and latest question, reformulate the question to be standalone."),
+    MessagesPlaceholder(variable_name="chat_history"),
+    ("human", "{input}"),
+])
+
+contextualize_chain = contextualize_prompt | llm | StrOutputParser()
+
+# Answer with context
+answer_prompt = ChatPromptTemplate.from_messages([
+    ("system", "Answer based on context:\n\n{context}"),
+    MessagesPlaceholder(variable_name="chat_history"),
+    ("human", "{input}"),
+])
+
+def format_docs(docs):
+    return "\n".join(doc.page_content for doc in docs)
+
+# Full conversational RAG
+chat_history = []
+
+def ask(question: str) -> str:
+    # Contextualize if there's history
+    if chat_history:
+        standalone = contextualize_chain.invoke({
+            "chat_history": chat_history,
+            "input": question,
+        })
+    else:
+        standalone = question
+
+    # Retrieve and answer
+    docs = retriever.invoke(standalone)
+    context = format_docs(docs)
+
+    answer = (answer_prompt | llm | StrOutputParser()).invoke({
+        "context": context,
+        "chat_history": chat_history,
+        "input": question,
+    })
+
+    # Update history
+    chat_history.append(HumanMessage(content=question))
+    chat_history.append(AIMessage(content=answer))
+
+    return answer
+
+# Multi-turn conversation
+print(ask("What is Python?"))
+print(ask("Who created it?"))  # Understands "it" = Python
+print(ask("When was that?"))   # Understands "that" = creation date
+```
+
 ## BrainiallEmbeddings
 
 Thin wrapper around `OpenAIEmbeddings` that pre-configures the Brainiall endpoint for embedding model access.
@@ -293,6 +696,307 @@ db = Chroma.from_documents(docs, embeddings)
 # Query
 results = db.similarity_search("Who created Rust?", k=1)
 print(results[0].page_content)
+```
+
+### With FAISS Vector Store
+
+```python
+from langchain_brainiall import BrainiallEmbeddings
+from langchain_community.vectorstores import FAISS
+from langchain_core.documents import Document
+
+embeddings = BrainiallEmbeddings(model="titan-embed-v2")
+
+docs = [
+    Document(page_content="Neural networks are inspired by biological neurons."),
+    Document(page_content="Gradient descent optimizes model parameters."),
+    Document(page_content="Transformers use self-attention mechanisms."),
+]
+
+# Create FAISS index
+db = FAISS.from_documents(docs, embeddings)
+
+# Save and load
+db.save_local("faiss_index")
+loaded_db = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
+
+# Similarity search with scores
+results = loaded_db.similarity_search_with_score("How do transformers work?", k=2)
+for doc, score in results:
+    print(f"Score: {score:.4f} — {doc.page_content}")
+```
+
+### Document Similarity Comparison
+
+```python
+from langchain_brainiall import BrainiallEmbeddings
+import numpy as np
+
+embeddings = BrainiallEmbeddings(model="bge-m3")
+
+texts = [
+    "Machine learning automates analytical model building",
+    "Deep learning is a subset of machine learning",
+    "The weather today is sunny and warm",
+]
+
+vectors = embeddings.embed_documents(texts)
+
+# Cosine similarity
+def cosine_similarity(a, b):
+    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+for i in range(len(texts)):
+    for j in range(i + 1, len(texts)):
+        sim = cosine_similarity(vectors[i], vectors[j])
+        print(f"Similarity({i},{j}): {sim:.4f} — '{texts[i][:40]}' vs '{texts[j][:40]}'")
+```
+
+## Agent Patterns
+
+### Multi-Tool Agent with LangGraph
+
+```python
+from langchain_brainiall import ChatBrainiall
+from langgraph.prebuilt import create_react_agent
+from langchain_core.tools import tool
+import json
+
+@tool
+def search_products(query: str, max_results: int = 5) -> str:
+    """Search for products in the catalog."""
+    # Simulated product search
+    products = [
+        {"name": "Wireless Mouse", "price": 29.99, "rating": 4.5},
+        {"name": "Mechanical Keyboard", "price": 89.99, "rating": 4.8},
+        {"name": "USB-C Hub", "price": 45.99, "rating": 4.2},
+    ]
+    return json.dumps(products[:max_results])
+
+@tool
+def calculate_discount(price: float, discount_percent: float) -> str:
+    """Calculate the discounted price."""
+    discounted = price * (1 - discount_percent / 100)
+    return f"Original: ${price:.2f}, Discount: {discount_percent}%, Final: ${discounted:.2f}"
+
+@tool
+def check_inventory(product_name: str) -> str:
+    """Check if a product is in stock."""
+    # Simulated inventory check
+    return f"{product_name} is in stock. 42 units available."
+
+llm = ChatBrainiall(model="claude-sonnet-4-6")
+agent = create_react_agent(llm, [search_products, calculate_discount, check_inventory])
+
+result = agent.invoke({
+    "messages": [("human", "Find keyboards under $100 and apply a 15% discount")]
+})
+
+for msg in result["messages"]:
+    if msg.content:
+        print(f"{msg.type}: {msg.content}")
+```
+
+### Supervisor Agent Pattern
+
+```python
+from langchain_brainiall import ChatBrainiall
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+
+# Specialized workers
+researcher = ChatBrainiall(model="claude-sonnet-4-6", temperature=0)
+writer = ChatBrainiall(model="claude-sonnet-4-6", temperature=0.7)
+editor = ChatBrainiall(model="claude-haiku-4-5", temperature=0)
+
+# Supervisor coordinates the workflow
+supervisor = ChatBrainiall(model="claude-opus-4-6", temperature=0)
+
+def research_and_write(topic: str) -> str:
+    # Step 1: Research
+    research_prompt = ChatPromptTemplate.from_template(
+        "Research the topic '{topic}' and provide 5 key facts with sources."
+    )
+    research = (research_prompt | researcher | StrOutputParser()).invoke({"topic": topic})
+
+    # Step 2: Write
+    write_prompt = ChatPromptTemplate.from_template(
+        "Write a 300-word article based on these facts:\n{facts}"
+    )
+    draft = (write_prompt | writer | StrOutputParser()).invoke({"facts": research})
+
+    # Step 3: Edit
+    edit_prompt = ChatPromptTemplate.from_template(
+        "Edit this article for clarity, grammar, and flow. Return the improved version:\n{draft}"
+    )
+    final = (edit_prompt | editor | StrOutputParser()).invoke({"draft": draft})
+
+    return final
+
+article = research_and_write("the impact of quantum computing on cryptography")
+print(article)
+```
+
+## Cost Optimization Patterns
+
+### Model Tiering by Task Complexity
+
+```python
+from langchain_brainiall import ChatBrainiall
+
+# Tier 1: Ultra-cheap for simple tasks ($0.035/$0.14 per MTok)
+tier1 = ChatBrainiall(model="nova-micro", temperature=0)
+
+# Tier 2: Balanced for moderate tasks ($1.00/$5.00 per MTok)
+tier2 = ChatBrainiall(model="claude-haiku-4-5", temperature=0)
+
+# Tier 3: Premium for complex tasks ($3.00/$15.00 per MTok)
+tier3 = ChatBrainiall(model="claude-sonnet-4-6", temperature=0)
+
+# Tier 4: Best quality for critical tasks ($5.00/$25.00 per MTok)
+tier4 = ChatBrainiall(model="claude-opus-4-6", temperature=0)
+
+# Use the right model for each task
+classification = tier1.invoke("Is this positive or negative: 'I love this product'")
+summary = tier2.invoke("Summarize this paragraph: ...")
+analysis = tier3.invoke("Analyze the legal implications of this contract clause: ...")
+strategy = tier4.invoke("Design a go-to-market strategy for a new SaaS product targeting enterprise...")
+```
+
+### Batch Processing for Cost Efficiency
+
+```python
+from langchain_brainiall import ChatBrainiall
+import asyncio
+
+llm = ChatBrainiall(model="claude-haiku-4-5")
+
+# Process 100 items efficiently using batch
+items = [f"Classify this text as positive/negative: '{text}'" for text in texts_list]
+
+# Batch with concurrency control
+responses = llm.batch(
+    items,
+    config={"max_concurrency": 10},  # Limit concurrent requests
+)
+
+# Or async batch for even better performance
+async def process_async():
+    responses = await llm.abatch(
+        items,
+        config={"max_concurrency": 20},
+    )
+    return responses
+
+results = asyncio.run(process_async())
+```
+
+## LangServe Deployment
+
+### Serve ChatBrainiall as a REST API
+
+```python
+# server.py
+from fastapi import FastAPI
+from langserve import add_routes
+from langchain_brainiall import ChatBrainiall
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+
+app = FastAPI(title="Brainiall LangServe", version="1.0")
+
+# Simple chat endpoint
+llm = ChatBrainiall(model="claude-sonnet-4-6")
+add_routes(app, llm, path="/chat")
+
+# Custom chain endpoint
+prompt = ChatPromptTemplate.from_template("Translate to {language}: {text}")
+chain = prompt | llm | StrOutputParser()
+add_routes(app, chain, path="/translate")
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+```
+
+### Client Usage
+
+```python
+from langserve import RemoteRunnable
+
+# Connect to the LangServe endpoint
+chain = RemoteRunnable("http://localhost:8000/translate")
+
+# Invoke remotely
+result = chain.invoke({"text": "Hello, world!", "language": "French"})
+print(result)
+
+# Stream remotely
+for chunk in chain.stream({"text": "Tell me a story", "language": "Spanish"}):
+    print(chunk, end="", flush=True)
+```
+
+## Migration Guides
+
+### From langchain-openai
+
+```python
+# Before (langchain-openai)
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+
+llm = ChatOpenAI(model="gpt-4o", api_key="sk-...")
+embeddings = OpenAIEmbeddings(model="text-embedding-3-small", api_key="sk-...")
+
+# After (langchain-brainiall) — drop-in replacement
+from langchain_brainiall import ChatBrainiall, BrainiallEmbeddings
+
+llm = ChatBrainiall(model="claude-sonnet-4-6", api_key="br-...")
+embeddings = BrainiallEmbeddings(model="bge-m3", api_key="br-...")
+
+# All existing chains, agents, and tools work unchanged
+# because ChatBrainiall extends ChatOpenAI
+```
+
+### From langchain-anthropic
+
+```python
+# Before (langchain-anthropic)
+from langchain_anthropic import ChatAnthropic
+
+llm = ChatAnthropic(model="claude-sonnet-4-6", anthropic_api_key="sk-ant-...")
+
+# After (langchain-brainiall) — same models, lower cost via Bedrock
+from langchain_brainiall import ChatBrainiall
+
+llm = ChatBrainiall(model="claude-sonnet-4-6", api_key="br-...")
+
+# Benefit: Access to 113+ models with a single API key
+# Plus: Bedrock prompt caching and cross-region inference
+```
+
+### From Multiple Providers to Single Gateway
+
+```python
+# Before: Managing multiple API keys and packages
+from langchain_openai import ChatOpenAI
+from langchain_anthropic import ChatAnthropic
+from langchain_google_genai import ChatGoogleGenerativeAI
+
+gpt = ChatOpenAI(model="gpt-4o", api_key="sk-openai-...")
+claude = ChatAnthropic(model="claude-sonnet-4-6", anthropic_api_key="sk-ant-...")
+# gemini = ChatGoogleGenerativeAI(model="gemini-pro", google_api_key="AIza...")
+
+# After: One package, one API key, 113+ models
+from langchain_brainiall import ChatBrainiall
+
+claude = ChatBrainiall(model="claude-sonnet-4-6")     # Anthropic
+deepseek = ChatBrainiall(model="deepseek-r1")          # DeepSeek
+llama = ChatBrainiall(model="llama-3.3-70b")           # Meta
+qwen = ChatBrainiall(model="qwen-3-235b")              # Qwen/Alibaba
+mistral = ChatBrainiall(model="mistral-large-3")       # Mistral
+nova = ChatBrainiall(model="nova-pro")                  # Amazon
+
+# All use the same BRAINIALL_API_KEY environment variable
 ```
 
 ## Available Chat Models
@@ -350,10 +1054,23 @@ class ChatBrainiall(ChatOpenAI):
         max_tokens (int): Max tokens to generate.
         max_retries (int): Max retries on failure. Default: 2.
         timeout (float): Request timeout in seconds.
+        streaming (bool): Enable streaming mode.
+        model_kwargs (dict): Additional model parameters (e.g., response_format).
 
     Class methods:
         get_available_models() -> list[str]: List available model names.
         get_model_info(model: str) -> dict: Get context/output info for a model.
+
+    Inherited from ChatOpenAI:
+        invoke(input) -> AIMessage
+        stream(input) -> Iterator[AIMessageChunk]
+        batch(inputs) -> list[AIMessage]
+        ainvoke(input) -> AIMessage
+        astream(input) -> AsyncIterator[AIMessageChunk]
+        abatch(inputs) -> list[AIMessage]
+        bind_tools(tools) -> Runnable
+        with_structured_output(schema) -> Runnable
+        with_fallbacks(fallbacks) -> RunnableWithFallbacks
     """
 ```
 
@@ -371,7 +1088,37 @@ class BrainiallEmbeddings(OpenAIEmbeddings):
 
     Class methods:
         get_available_models() -> list[str]: List available embedding models.
+
+    Inherited from OpenAIEmbeddings:
+        embed_query(text: str) -> list[float]
+        embed_documents(texts: list[str]) -> list[list[float]]
+        aembed_query(text: str) -> list[float]
+        aembed_documents(texts: list[str]) -> list[list[float]]
     """
+```
+
+## Error Handling
+
+```python
+from langchain_brainiall import ChatBrainiall
+from langchain_core.exceptions import OutputParserException
+import openai
+
+llm = ChatBrainiall(model="claude-sonnet-4-6", max_retries=3)
+
+try:
+    response = llm.invoke("Hello")
+    print(response.content)
+except openai.AuthenticationError:
+    print("Invalid API key. Set BRAINIALL_API_KEY env var.")
+except openai.RateLimitError:
+    print("Rate limit exceeded. Reduce concurrency or upgrade plan.")
+except openai.APIConnectionError:
+    print("Cannot connect to API. Check network and base URL.")
+except openai.APITimeoutError:
+    print("Request timed out. Increase timeout or reduce max_tokens.")
+except OutputParserException as e:
+    print(f"Failed to parse structured output: {e}")
 ```
 
 ## Links
