@@ -1,0 +1,385 @@
+# langchain-brainiall — Full Documentation
+
+## Overview
+
+langchain-brainiall is a LangChain integration package for the Brainiall LLM Gateway. It provides `ChatBrainiall` (chat models) and `BrainiallEmbeddings` (embeddings) classes that give LangChain users access to 113+ AI models from 17 providers (Anthropic, DeepSeek, Meta, Qwen, Mistral, Amazon, NVIDIA, MiniMax, Moonshot, and more) through a single OpenAI-compatible API powered by AWS Bedrock.
+
+## Installation
+
+```bash
+pip install langchain-brainiall
+```
+
+## Quick Start
+
+```python
+from langchain_brainiall import ChatBrainiall
+
+llm = ChatBrainiall(
+    model="claude-sonnet-4-6",
+    api_key="your-api-key",  # or set BRAINIALL_API_KEY env var
+)
+
+response = llm.invoke("Explain quantum computing in one sentence.")
+print(response.content)
+```
+
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `BRAINIALL_API_KEY` | API key for authentication (required) |
+| `BRAINIALL_API_BASE` | Override the default API base URL (optional) |
+
+## ChatBrainiall
+
+Thin wrapper around `ChatOpenAI` that pre-configures the Brainiall endpoint. All `ChatOpenAI` features are supported: streaming, tool calling, structured output, multi-modal input, async, batching, and more.
+
+### Basic Usage
+
+```python
+from langchain_brainiall import ChatBrainiall
+
+llm = ChatBrainiall(
+    model="claude-sonnet-4-6",
+    temperature=0,
+    max_tokens=1024,
+    # api_key="...",  # or set BRAINIALL_API_KEY env var
+)
+
+# Simple invocation
+response = llm.invoke("What is the capital of France?")
+print(response.content)
+
+# With message history
+messages = [
+    ("system", "You are a helpful math tutor."),
+    ("human", "What is the derivative of x^3?"),
+]
+response = llm.invoke(messages)
+print(response.content)
+```
+
+### Streaming
+
+```python
+from langchain_brainiall import ChatBrainiall
+
+llm = ChatBrainiall(model="claude-sonnet-4-6")
+
+for chunk in llm.stream("Write a haiku about programming"):
+    print(chunk.content, end="", flush=True)
+```
+
+### Async Support
+
+```python
+import asyncio
+from langchain_brainiall import ChatBrainiall
+
+async def main():
+    llm = ChatBrainiall(model="claude-haiku-4-5")
+
+    # Async invoke
+    response = await llm.ainvoke("Hello!")
+    print(response.content)
+
+    # Async streaming
+    async for chunk in llm.astream("Tell me a joke"):
+        print(chunk.content, end="", flush=True)
+
+asyncio.run(main())
+```
+
+### Tool Calling
+
+```python
+from pydantic import BaseModel, Field
+from langchain_brainiall import ChatBrainiall
+
+class GetWeather(BaseModel):
+    """Get current weather for a location."""
+    location: str = Field(description="City name")
+    unit: str = Field(default="celsius", description="Temperature unit")
+
+class SearchDatabase(BaseModel):
+    """Search the database for records."""
+    query: str = Field(description="Search query")
+    limit: int = Field(default=10, description="Max results")
+
+llm = ChatBrainiall(model="claude-sonnet-4-6")
+llm_with_tools = llm.bind_tools([GetWeather, SearchDatabase])
+
+response = llm_with_tools.invoke("What's the weather in Tokyo and Paris?")
+for tool_call in response.tool_calls:
+    print(f"Tool: {tool_call['name']}, Args: {tool_call['args']}")
+```
+
+### Structured Output
+
+```python
+from pydantic import BaseModel
+from langchain_brainiall import ChatBrainiall
+
+class MovieReview(BaseModel):
+    title: str
+    rating: float
+    summary: str
+    pros: list[str]
+    cons: list[str]
+
+llm = ChatBrainiall(model="claude-sonnet-4-6")
+structured = llm.with_structured_output(MovieReview)
+
+review = structured.invoke("Review the movie Inception")
+print(f"{review.title}: {review.rating}/10")
+print(f"Summary: {review.summary}")
+print(f"Pros: {', '.join(review.pros)}")
+print(f"Cons: {', '.join(review.cons)}")
+```
+
+### Multi-Model Chains
+
+Use different models for different steps -- cheap models for drafting, powerful models for refinement:
+
+```python
+from langchain_brainiall import ChatBrainiall
+from langchain_core.prompts import ChatPromptTemplate
+
+fast = ChatBrainiall(model="nova-micro", temperature=0.7)
+smart = ChatBrainiall(model="claude-opus-4-6", temperature=0)
+
+# Draft with fast model ($0.035/$0.14 per MTok)
+draft = fast.invoke("Write a product description for wireless earbuds")
+
+# Refine with powerful model ($5/$25 per MTok)
+final = smart.invoke(f"Improve this product description:\n{draft.content}")
+print(final.content)
+```
+
+### RAG Pipeline with Prompt Templates
+
+```python
+from langchain_brainiall import ChatBrainiall
+from langchain_core.prompts import ChatPromptTemplate
+
+llm = ChatBrainiall(model="claude-sonnet-4-6", temperature=0)
+
+prompt = ChatPromptTemplate.from_messages([
+    ("system", "Answer the question based only on the following context:\n\n{context}"),
+    ("human", "{question}")
+])
+
+chain = prompt | llm
+
+response = chain.invoke({
+    "context": "Python was created by Guido van Rossum in 1991. It emphasizes code readability.",
+    "question": "Who created Python and when?"
+})
+print(response.content)
+```
+
+### With LangGraph Agents
+
+```python
+from langchain_brainiall import ChatBrainiall
+from langgraph.prebuilt import create_react_agent
+from langchain_core.tools import tool
+
+@tool
+def calculate(expression: str) -> str:
+    """Calculate a mathematical expression."""
+    return str(eval(expression))
+
+@tool
+def get_current_time() -> str:
+    """Get the current UTC time."""
+    from datetime import datetime
+    return datetime.utcnow().isoformat()
+
+llm = ChatBrainiall(model="claude-sonnet-4-6")
+agent = create_react_agent(llm, [calculate, get_current_time])
+
+result = agent.invoke({"messages": [("human", "What is 25 * 48 + 137?")]})
+for msg in result["messages"]:
+    print(f"{msg.type}: {msg.content}")
+```
+
+### LCEL Chains (LangChain Expression Language)
+
+```python
+from langchain_brainiall import ChatBrainiall
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+
+llm = ChatBrainiall(model="claude-sonnet-4-6")
+
+chain = (
+    ChatPromptTemplate.from_template("Translate '{text}' to {language}.")
+    | llm
+    | StrOutputParser()
+)
+
+result = chain.invoke({"text": "Hello, how are you?", "language": "Spanish"})
+print(result)
+```
+
+### Batch Processing
+
+```python
+from langchain_brainiall import ChatBrainiall
+
+llm = ChatBrainiall(model="claude-haiku-4-5")
+
+# Process multiple inputs at once
+questions = [
+    "What is machine learning?",
+    "What is deep learning?",
+    "What is reinforcement learning?",
+]
+
+# Batch invoke (runs concurrently)
+responses = llm.batch(questions)
+for q, r in zip(questions, responses):
+    print(f"Q: {q}")
+    print(f"A: {r.content[:100]}...\n")
+```
+
+## BrainiallEmbeddings
+
+Thin wrapper around `OpenAIEmbeddings` that pre-configures the Brainiall endpoint for embedding model access.
+
+### Basic Usage
+
+```python
+from langchain_brainiall import BrainiallEmbeddings
+
+embeddings = BrainiallEmbeddings(
+    model="bge-m3",
+    api_key="your-api-key",
+)
+
+# Embed a single query
+vector = embeddings.embed_query("What is machine learning?")
+print(f"Dimensions: {len(vector)}")
+
+# Embed multiple documents
+vectors = embeddings.embed_documents([
+    "Machine learning is a subset of AI.",
+    "Deep learning uses neural networks.",
+    "NLP processes human language.",
+])
+print(f"Embedded {len(vectors)} documents, each with {len(vectors[0])} dimensions")
+```
+
+### With Vector Store (ChromaDB)
+
+```python
+from langchain_brainiall import ChatBrainiall, BrainiallEmbeddings
+from langchain_chroma import Chroma
+from langchain_core.documents import Document
+
+embeddings = BrainiallEmbeddings(model="bge-m3")
+llm = ChatBrainiall(model="claude-sonnet-4-6")
+
+# Create vector store
+docs = [
+    Document(page_content="Python was created in 1991 by Guido van Rossum."),
+    Document(page_content="JavaScript was created in 1995 by Brendan Eich."),
+    Document(page_content="Rust was first released in 2010 by Mozilla."),
+]
+db = Chroma.from_documents(docs, embeddings)
+
+# Query
+results = db.similarity_search("Who created Rust?", k=1)
+print(results[0].page_content)
+```
+
+## Available Chat Models
+
+| Model | Provider | Context | Max Output | Input $/MTok | Output $/MTok |
+|-------|----------|---------|------------|-------------|--------------|
+| claude-opus-4-6 | Anthropic | 200K | 64K | $5.00 | $25.00 |
+| claude-opus-4-6-1m | Anthropic | 1M | 64K | $5.00 | $25.00 |
+| claude-opus-4-5 | Anthropic | 200K | 32K | $15.00 | $75.00 |
+| claude-sonnet-4-6 | Anthropic | 200K | 64K | $3.00 | $15.00 |
+| claude-sonnet-4-6-1m | Anthropic | 1M | 64K | $3.00 | $15.00 |
+| claude-haiku-4-5 | Anthropic | 200K | 16K | $1.00 | $5.00 |
+| claude-3-opus | Anthropic | 200K | 4K | $15.00 | $75.00 |
+| deepseek-r1 | DeepSeek | 128K | 64K | $1.35 | $5.40 |
+| deepseek-v3 | DeepSeek | 128K | 16K | $0.27 | $1.10 |
+| llama-3.3-70b | Meta | 128K | 4K | $0.72 | $0.72 |
+| llama-4-scout-17b | Meta | 1M | 16K | $0.17 | $0.17 |
+| llama-4-maverick-17b | Meta | 1M | 16K | $0.20 | $0.60 |
+| qwen-3-235b | Qwen | 128K | 16K | $0.80 | $2.40 |
+| qwen-3-32b | Qwen | 128K | 16K | $0.35 | $0.35 |
+| qwen-3-8b | Qwen | 128K | 16K | $0.045 | $0.18 |
+| qwen-3-80b | Qwen | 128K | 16K | $0.40 | $1.20 |
+| mistral-large-3 | Mistral | 128K | 16K | $2.00 | $6.00 |
+| mistral-small-3 | Mistral | 128K | 16K | $0.10 | $0.30 |
+| nova-pro | Amazon | 300K | 5K | $0.80 | $3.20 |
+| nova-lite | Amazon | 300K | 5K | $0.06 | $0.24 |
+| nova-micro | Amazon | 128K | 5K | $0.035 | $0.14 |
+| minimax-m2 | MiniMax | 1M | 128K | $0.50 | $2.20 |
+| nemotron-ultra-253b | NVIDIA | 128K | 16K | $0.72 | $0.72 |
+| kimi-k2.5 | Moonshot | 128K | 16K | $0.60 | $2.40 |
+
+## Available Embedding Models
+
+| Model | Dimensions | Max Tokens | Price $/MTok |
+|-------|-----------|------------|-------------|
+| bge-m3 | 1024 | 8192 | $0.02 |
+| bge-large-en-v1.5 | 1024 | 512 | $0.02 |
+| cohere-embed-v3 | 1024 | 512 | $0.10 |
+| titan-embed-v2 | 1024 | 8192 | $0.02 |
+
+## Class Reference
+
+### ChatBrainiall
+
+```python
+class ChatBrainiall(ChatOpenAI):
+    """
+    Chat model for the Brainiall LLM Gateway.
+
+    Parameters:
+        model (str): Model name. Default: "claude-sonnet-4-6"
+        api_key (str): API key. Falls back to BRAINIALL_API_KEY env var.
+        base_url (str): API base URL. Default: Brainiall gateway.
+        temperature (float): Sampling temperature 0-2.
+        max_tokens (int): Max tokens to generate.
+        max_retries (int): Max retries on failure. Default: 2.
+        timeout (float): Request timeout in seconds.
+
+    Class methods:
+        get_available_models() -> list[str]: List available model names.
+        get_model_info(model: str) -> dict: Get context/output info for a model.
+    """
+```
+
+### BrainiallEmbeddings
+
+```python
+class BrainiallEmbeddings(OpenAIEmbeddings):
+    """
+    Embeddings model for the Brainiall LLM Gateway.
+
+    Parameters:
+        model (str): Embedding model name. Default: "bge-m3"
+        api_key (str): API key. Falls back to BRAINIALL_API_KEY env var.
+        base_url (str): API base URL. Default: Brainiall gateway.
+
+    Class methods:
+        get_available_models() -> list[str]: List available embedding models.
+    """
+```
+
+## Links
+
+- Website: https://brainiall.com
+- Get API Key: https://brainiall.com
+- PyPI: https://pypi.org/project/langchain-brainiall/
+- LLM Gateway: https://github.com/fasuizu-br/brainiall-llm-gateway
+- Speech AI: https://github.com/fasuizu-br/speech-ai-examples
+- NLP API: https://github.com/fasuizu-br/brainiall-nlp-api
+- Image API: https://github.com/fasuizu-br/brainiall-image-api
