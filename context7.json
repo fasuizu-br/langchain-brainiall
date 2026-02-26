@@ -1,0 +1,15 @@
+{
+  "$schema": "https://context7.com/schema/context7.json",
+  "projectTitle": "langchain-brainiall",
+  "description": "LangChain integration for the Brainiall LLM Gateway providing ChatBrainiall and BrainiallEmbeddings classes with access to 113+ AI models from 17 providers through a single OpenAI-compatible API",
+  "folders": [],
+  "excludeFolders": ["dist", "build", ".git", "__pycache__", "*.egg-info"],
+  "excludeFiles": ["CHANGELOG.md", "LICENSE", "setup.cfg"],
+  "rules": [
+    "Use ChatBrainiall as a drop-in replacement for ChatOpenAI",
+    "Use BrainiallEmbeddings as a drop-in replacement for OpenAIEmbeddings",
+    "Set BRAINIALL_API_KEY environment variable for authentication",
+    "Use nova-micro for cheap tasks and claude-opus-4-6 for complex tasks",
+    "All ChatOpenAI features work: streaming, tool calling, structured output, async, batching"
+  ]
+}
