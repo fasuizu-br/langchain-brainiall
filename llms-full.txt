@@ -2,14 +2,14 @@
 
 ## Overview
 
-langchain-brainiall is a LangChain integration package for the Brainiall LLM Gateway. It provides `ChatBrainiall` (chat models) and `BrainiallEmbeddings` (embeddings) classes that give LangChain users access to 113+ AI models from 17 providers (Anthropic, DeepSeek, Meta, Qwen, Mistral, Amazon, NVIDIA, MiniMax, Moonshot, and more) through a single OpenAI-compatible API powered by AWS Bedrock.
+langchain-brainiall is a LangChain integration package for the Brainiall LLM Gateway. It provides `ChatBrainiall` (chat models) and `BrainiallEmbeddings` (embeddings) classes that give LangChain users access to 113+ AI models from 17 providers (Anthropic, DeepSeek, Meta, Qwen, Mistral, Amazon, NVIDIA, MiniMax, Moonshot, and more) through a single OpenAI-compatible API.
 
 Key benefits:
 - **One API key, 113+ models**: Access Claude, DeepSeek, Llama, Qwen, Mistral, Nova, and more
 - **Drop-in replacement**: Swap `ChatOpenAI` for `ChatBrainiall` with zero code changes
 - **Full LangChain compatibility**: Streaming, tool calling, structured output, async, batching, RAG, agents
 - **Cost optimization**: Use cheap models ($0.035/MTok) for drafting, powerful models ($5/MTok) for refinement
-- **AWS Bedrock backend**: Enterprise-grade reliability, prompt caching, cross-region inference
+- **Enterprise-grade reliability**: response caching, automatic failover, low-latency routing
 
 ## Installation
 
@@ -965,13 +965,13 @@ from langchain_anthropic import ChatAnthropic
 
 llm = ChatAnthropic(model="claude-sonnet-4-6", anthropic_api_key="sk-ant-...")
 
-# After (langchain-brainiall) — same models, lower cost via Bedrock
+# After (langchain-brainiall) — same models, lower cost
 from langchain_brainiall import ChatBrainiall
 
 llm = ChatBrainiall(model="claude-sonnet-4-6", api_key="br-...")
 
 # Benefit: Access to 113+ models with a single API key
-# Plus: Bedrock prompt caching and cross-region inference
+# Plus: automatic response caching and failover
 ```
 
 ### From Multiple Providers to Single Gateway

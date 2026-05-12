@@ -27,7 +27,7 @@ print(response.content)
 - **113+ models** from 17 providers (Anthropic, DeepSeek, Meta, Qwen, Mistral, Amazon, and more)
 - **OpenAI-compatible** -- supports all ChatOpenAI features (streaming, tools, structured output)
 - **Single API key** -- one key for all models, no need to manage multiple provider accounts
-- **Cost-optimized** -- powered by AWS Bedrock with automatic prompt caching and flex pricing
+- **Cost-optimized** -- automatic response caching and optimized routing keep your bill low
 
 ## Environment Variables
 

@@ -59,7 +59,7 @@ class ChatBrainiall(ChatOpenAI):
 
     Brainiall provides a unified OpenAI-compatible API for 113+ models from
     17 providers (Anthropic, DeepSeek, Meta, Qwen, Mistral, Amazon, and more),
-    powered by AWS Bedrock with built-in cost optimization.
+    with built-in cost optimization and response caching.
 
     This class is a thin wrapper around ``ChatOpenAI`` that sets the correct
     base URL and default model. All ``ChatOpenAI`` features are supported:
