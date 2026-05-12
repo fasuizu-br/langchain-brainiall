@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "langchain-brainiall"
-version = "0.1.0"
+version = "0.1.1"
 description = "LangChain integration for Brainiall LLM Gateway - 113+ AI models from 17 providers"
 readme = "README.md"
 license = "MIT"
